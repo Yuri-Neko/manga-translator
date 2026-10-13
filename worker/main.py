@@ -138,12 +138,12 @@ def translate_text(text, source, target, context=""):
             [{"role":"system","content":"You translate manga dialogue accurately and naturally. Output only the translation."},
              {"role":"user","content":prompt}],
         )
-    elif provider in ("openai-compatible", "local"):
+    elif provider in ("clouvia", "openai-compatible", "local"):
         translated = _openai_compatible_chat(
-            os.getenv("OPENAI_COMPATIBLE_BASE_URL", "http://host.docker.internal:1234/v1"),
-            os.getenv("OPENAI_COMPATIBLE_API_KEY", "local"),
-            os.getenv("OPENAI_COMPATIBLE_MODEL", "local-model"),
-            [{"role":"system","content":"You are an accurate manga dialogue translator. Output only the translation."},
+            os.getenv("TRANSLATION_BASE_URL", os.getenv("OPENAI_COMPATIBLE_BASE_URL", "https://router.clouvia.id/v1")),
+            os.getenv("TRANSLATION_API_KEY", os.getenv("OPENAI_COMPATIBLE_API_KEY", "")),
+            os.getenv("TRANSLATION_MODEL", os.getenv("OPENAI_COMPATIBLE_MODEL", "agnes-2.5-flash")),
+            [{"role":"system","content":"You are a professional manga localization translator. Translate each dialogue naturally and accurately into Indonesian. Respect context, character intent, pronouns, idioms, and tone. Keep character names unchanged. Return only the translated dialogue, with no explanation or quotation marks."},
              {"role":"user","content":prompt}],
         )
     else:
