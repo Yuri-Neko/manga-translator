@@ -43,3 +43,10 @@ npm run dev
 ```
 
 The frontend expects the Docker API to be available through the Nginx proxy for job submission and status.
+
+
+## Translated manga image output
+
+The Docker worker now also attempts to generate a translated PNG for each page. It uses PaddleOCR polygons, OpenCV Telea inpainting to remove detected lettering, LibreTranslate for the selected target language, and Pillow to typeset the translated text. Downloaded `results.zip` includes `translated_images/*.png` alongside the JSON/TXT translation data.
+
+This is automatic image cleanup, not generative reconstruction: complex artwork behind lettering can leave visible artifacts, and long or vertical text may need manual review. Use a TTF font with the desired scripts and configure `MANGA_FONT_PATH` when the default font lacks glyph coverage. Rebuild the Docker worker after updates with `docker compose up -d --build worker`.
