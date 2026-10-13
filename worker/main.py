@@ -12,6 +12,7 @@ import redis
 import requests
 from PIL import Image
 from paddleocr import PaddleOCR
+from worker.image_pipeline import render_translated_page
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("manga-worker")
@@ -86,6 +87,9 @@ def process_job(job):
     pages = image_inputs(job)
     if not pages: raise RuntimeError("Tidak ada gambar yang bisa diproses. ZIP harus berisi PNG/JPG/WebP/BMP/TIFF.")
     rows = []
+    out_dir = RESULTS / job_id
+    image_out_dir = out_dir / "translated_images"
+    out_dir.mkdir(parents=True, exist_ok=True)
     for page_index, page in enumerate(pages, start=1):
         log.info("Job %s: OCR page %s/%s (%s)", job_id, page_index, len(pages), page["name"])
         try:
@@ -106,17 +110,25 @@ def process_job(job):
                         translated, translation_error = "", str(error)[:240]
                     lines.append({"line": line_index, "text": text, "translation": translated, "confidence": round(score, 4),
                                   "box": [[round(float(v), 2) for v in point] for point in line[0]], "translationError": translation_error})
-            rows.append({"page": page_index, "file": page["name"], "lines": lines})
+            safe_stem = Path(page["name"]).stem.replace("/", "_").replace("\\", "_") or f"page-{page_index}"
+            rendered_path = image_out_dir / f"{page_index:04d}-{safe_stem}.png"
+            try:
+                render_info = render_translated_page(page["path"], lines, rendered_path)
+                rows.append({"page": page_index, "file": page["name"], "lines": lines,
+                             "translatedImage": f"translated_images/{rendered_path.name}",
+                             "renderedLines": render_info["renderedLines"]})
+            except Exception as render_error:
+                log.exception("Image rendering failed for %s", page["name"])
+                rows.append({"page": page_index, "file": page["name"], "lines": lines,
+                             "imageError": str(render_error)[:400]})
         except Exception as error:
             log.exception("OCR failed for %s", page["name"])
             rows.append({"page": page_index, "file": page["name"], "lines": [], "error": str(error)[:400]})
         finally:
             if page.get("temporary"): Path(page["path"]).unlink(missing_ok=True)
-    out_dir = RESULTS / job_id
-    out_dir.mkdir(parents=True, exist_ok=True)
     json_path, text_path, zip_path = out_dir / "translation.json", out_dir / "translation.txt", out_dir / "results.zip"
     json_path.write_text(json.dumps({"jobId": job_id, "sourceLanguage": source, "targetLanguage": target, "pages": rows,
-        "notice": "OCR + text translation output. Image cleaning/typesetting is not yet included."}, ensure_ascii=False, indent=2), encoding="utf-8")
+        "notice": "Translated PNG pages are generated using OCR boxes, OpenCV inpainting, and PIL typesetting. Review results: complex artwork may need manual cleanup."}, ensure_ascii=False, indent=2), encoding="utf-8")
     text_lines = [f"Manga Translate Studio — Job {job_id}", f"Source: {source} | Target: {target}", ""]
     for page in rows:
         text_lines.append(f"=== Page {page['page']}: {page['file']} ===")
@@ -126,11 +138,16 @@ def process_job(job):
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.write(json_path, "translation.json")
         archive.write(text_path, "translation.txt")
+        if image_out_dir.exists():
+            for image_file in sorted(image_out_dir.glob("*.png")):
+                archive.write(image_file, f"translated_images/{image_file.name}")
     total_lines = sum(len(page["lines"]) for page in rows)
     db_update(job_id, "completed", result_path=str(zip_path), result_summary={"pages": len(rows), "textLines": total_lines,
         "translatedLines": sum(1 for page in rows for line in page["lines"] if line.get("translation")),
-        "output": ["translation.json", "translation.txt"],
-        "note": "OCR and text translation completed where models were available. Cleaned/typeset manga images are not generated yet."})
+        "translatedImages": sum(1 for page in rows if page.get("translatedImage")),
+        "renderedLines": sum(int(page.get("renderedLines", 0)) for page in rows),
+        "output": ["translation.json", "translation.txt", "translated_images/*.png"],
+        "note": "PNG output uses automatic inpainting/typesetting; visually inspect complex backgrounds and line wrapping."})
     log.info("Job %s completed: %s pages, %s lines", job_id, len(rows), total_lines)
 
 def main():
