@@ -72,7 +72,7 @@ def normalize_image(image_path):
     image.save(buffer, format="JPEG", quality=95)
     return buffer.getvalue()
 
-def _gemini_generate(parts, model=None):
+def _gemini_generate(parts, model=None, response_mime_type="text/plain"):
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY belum diatur")
@@ -201,7 +201,7 @@ def gemini_vision_ocr(image):
     )
     model = os.getenv("GEMINI_VISION_MODEL", os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
     parts = [{"text": prompt}, {"inlineData": {"mimeType":"image/jpeg", "data":base64.b64encode(buffer.getvalue()).decode("ascii")}}]
-    raw = _gemini_generate(parts, model=model)
+    raw = _gemini_generate(parts, model=model, response_mime_type="application/json")
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[-1]
