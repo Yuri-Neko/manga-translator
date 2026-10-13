@@ -10,6 +10,8 @@ from PIL import Image, ImageDraw, ImageFont
 log = logging.getLogger("manga-worker.image-pipeline")
 FONT_PATHS = [
     os.getenv("MANGA_FONT_PATH", ""),
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
 ]
