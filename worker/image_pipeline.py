@@ -105,8 +105,14 @@ def render_translated_page(source_path, lines, output_path):
     draw = ImageDraw.Draw(canvas)
     for line, points in valid:
         translation = re.sub(r"\s+", " ", str(line.get("translation") or "")).strip()
-        x0, y0, x1, y1 = _bounds(points, width, height, pad=3)
-        box_width, box_height = max(8, x1 - x0), max(8, y1 - y0)
+        tx0, ty0, tx1, ty1 = _bounds(points, width, height, pad=3)
+        glyph_width, glyph_height = max(8, tx1 - tx0), max(8, ty1 - ty0)
+        # OCR bounds hug glyphs tightly; Indonesian translations need more room.
+        box_width = min(width, max(glyph_width, int(glyph_width * 1.75)))
+        box_height = min(height, max(glyph_height, int(glyph_height * 1.65)))
+        cx, cy = (tx0 + tx1) // 2, (ty0 + ty1) // 2
+        x0 = max(0, min(width - box_width, cx - box_width // 2))
+        y0 = max(0, min(height - box_height, cy - box_height // 2))
         font, wrapped, line_height = _fit_text(draw, translation, box_width, box_height)
         total_height = len(wrapped) * line_height
         y = y0 + max(0, (box_height - total_height) // 2)
