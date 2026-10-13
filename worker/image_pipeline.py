@@ -62,11 +62,7 @@ def _fit_text(draw, text, width, height):
     return font, _wrap(text, font, max(8, width - 8), draw), 10
 
 def render_translated_page(source_path, lines, output_path):
-    """Erase detected lettering with OpenCV inpainting, then typeset translated lines.
-
-    This is a practical baseline: complex artwork behind text may leave artifacts and
-    font/layout may need manual review. The original file is never modified.
-    """
+    """Inpaint individual OCR glyph regions and typeset one translation per grouped block."""
     source_path, output_path = Path(source_path), Path(output_path)
     original = cv2.imread(str(source_path), cv2.IMREAD_COLOR)
     if original is None:
@@ -80,28 +76,36 @@ def render_translated_page(source_path, lines, output_path):
         if not translation or len(polygon) < 3:
             continue
         try:
-            points = np.asarray([[int(round(float(p[0]))), int(round(float(p[1])))] for p in polygon], dtype=np.int32)
+            points = np.asarray([[int(round(float(p[0])), int(round(float(p[1]))))] for p in polygon], dtype=np.int32).reshape(-1, 2)
             points[:, 0] = np.clip(points[:, 0], 0, width - 1)
             points[:, 1] = np.clip(points[:, 1], 0, height - 1)
             if len(points) < 3:
                 continue
-            cv2.fillPoly(mask, [points], 255)
+            erase_polygons = line.get("eraseBoxes") or [polygon]
+            for erase_polygon in erase_polygons:
+                if len(erase_polygon) < 3:
+                    continue
+                erase_points = np.asarray(
+                    [[int(round(float(p[0])), int(round(float(p[1]))))] for p in erase_polygon],
+                    dtype=np.int32
+                ).reshape(-1, 2)
+                erase_points[:, 0] = np.clip(erase_points[:, 0], 0, width - 1)
+                erase_points[:, 1] = np.clip(erase_points[:, 1], 0, height - 1)
+                cv2.fillPoly(mask, [erase_points], 255)
             valid.append((line, points))
         except (TypeError, ValueError, IndexError):
-            continue
-    # Slightly dilate to remove antialiased glyph edges while limiting damage.
+            log.warning("Skipping invalid OCR box during render")
     if np.any(mask):
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         mask = cv2.dilate(mask, kernel, iterations=1)
         cleaned = cv2.inpaint(original, mask, 3, cv2.INPAINT_TELEA)
     else:
         cleaned = original.copy()
-    rgb = cv2.cvtColor(cleaned, cv2.COLOR_BGR2RGB)
-    canvas = Image.fromarray(rgb)
+    canvas = Image.fromarray(cv2.cvtColor(cleaned, cv2.COLOR_BGR2RGB))
     draw = ImageDraw.Draw(canvas)
     for line, points in valid:
-        translation = re.sub(r"\s+", " ", str(line.get("translation") or "")).strip()
-        x0, y0, x1, y1 = _bounds(points, width, height, pad=2)
+        translation = re.sub(r"\\s+", " ", str(line.get("translation") or "")).strip()
+        x0, y0, x1, y1 = _bounds(points, width, height, pad=3)
         box_width, box_height = max(8, x1 - x0), max(8, y1 - y0)
         font, wrapped, line_height = _fit_text(draw, translation, box_width, box_height)
         total_height = len(wrapped) * line_height
@@ -110,7 +114,6 @@ def render_translated_page(source_path, lines, output_path):
             bbox = draw.textbbox((0, 0), text, font=font, stroke_width=0)
             text_width = bbox[2] - bbox[0]
             x = x0 + max(0, (box_width - text_width) // 2)
-            # A subtle light outline improves legibility on colored artwork.
             draw.text((x, y - bbox[1]), text, font=font, fill=(20, 20, 20),
                       stroke_width=max(0, int(font.size // 14)) if hasattr(font, "size") else 0,
                       stroke_fill=(255, 255, 255))
