@@ -4,11 +4,11 @@
 
 - **web:** Nginx serves the responsive React UI and proxies API calls.
 - **api:** Node.js/Express handles uploads, job status, PostgreSQL metadata, and Redis queue.
-- **worker:** Python + PaddleOCR reads manga text and requests translations from LibreTranslate.
+- **worker:** Python + PaddleOCR reads manga text, requests translations from LibreTranslate, removes detected lettering with OpenCV inpainting, typesets Indonesian/target-language text with Pillow, and exports translated PNG pages.
 - **translate:** self-hosted LibreTranslate; installed language pairs vary and first startup may download models.
 - **postgres / redis:** persistent job metadata and queue.
 
-The worker exports `translation.json` and `translation.txt` inside a downloadable ZIP. **This is an OCR + text-translation MVP, not yet a full image redraw/typesetting pipeline.** It does not erase original lettering or render translated dialogue back into manga pages.
+The downloadable ZIP contains `translation.json`, `translation.txt`, and `translated_images/*.png`. Each PNG is rendered from the original page: detected text polygons are inpainted, then translated text is drawn into the detected area. This is an automatic baseline, not a perfect typesetting engine; decorative backgrounds, overlapping art, vertical text, and long translations may need review.
 
 ## VPS requirements
 
@@ -33,7 +33,8 @@ Set a strong `POSTGRES_PASSWORD` in `.env` before startup. Open `http://YOUR_VPS
 - `WEB_PORT`: published web port (default 8080).
 - `POSTGRES_PASSWORD`: required database password.
 - `MAX_UPLOAD_MB`: per-file upload limit (default 40).
-- `OCR_MAX_IMAGE_SIDE`: downscale very large images before OCR (default 2200).
+- `OCR_MAX_IMAGE_SIDE`: downscale very large images before OCR (default 2200); OCR boxes are mapped back to the original image size before rendering.
+- `MANGA_FONT_PATH`: optional path to a TTF font with broad glyph coverage, mounted into the worker container if needed.
 - `WORKER_MEMORY_LIMIT`: worker memory limit hint (default 6G).
 
 ## Update
