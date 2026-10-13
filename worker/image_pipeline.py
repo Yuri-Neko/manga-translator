@@ -50,16 +50,29 @@ def _wrap(text, font, max_width, draw):
     return lines
 
 def _fit_text(draw, text, width, height):
-    max_size = max(9, min(32, int(height * 0.68), int(width * 0.20)))
-    for size in range(max_size, 7, -1):
+    # Keep rendered text strictly inside the OCR rectangle to prevent overlap.
+    width, height = max(8, int(width)), max(8, int(height))
+    max_size = max(6, min(24, int(height * 0.42), int(width * 0.16)))
+    for size in range(max_size, 5, -1):
         font = _font(size)
-        lines = _wrap(text, font, max(8, width - 8), draw)
+        lines = _wrap(text, font, max(8, width - 6), draw)
         boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=0) for line in lines]
-        line_height = max(1, max((b[3] - b[1] for b in boxes), default=size)) + max(1, size // 5)
-        if len(lines) * line_height <= max(1, height - 4):
+        line_height = max(1, max((b[3] - b[1] for b in boxes), default=size)) + max(1, size // 6)
+        if len(lines) * line_height <= max(1, height - 2):
             return font, lines, line_height
-    font = _font(8)
-    return font, _wrap(text, font, max(8, width - 8), draw), 10
+    font = _font(6)
+    lines = _wrap(text, font, max(8, width - 6), draw)
+    boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=0) for line in lines]
+    line_height = max(1, max((b[3] - b[1] for b in boxes), default=6)) + 1
+    max_lines = max(1, (height - 2) // line_height)
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        if lines:
+            last = lines[-1]
+            while last and draw.textbbox((0, 0), last + "…", font=font)[2] > width - 6:
+                last = last[:-1]
+            lines[-1] = (last + "…") if last else "…"
+    return font, lines, line_height
 
 def render_translated_page(source_path, lines, output_path):
     """Inpaint individual OCR glyph regions and typeset one translation per grouped block."""
