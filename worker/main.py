@@ -236,11 +236,11 @@ def process_job(job):
             normalized = normalize_image(page["path"])
             image = Image.open(io.BytesIO(normalized)).convert("RGB")
             import numpy as np
+            rgb = np.array(image)
             if source in ("auto", ""):
-                # Compare both OCR models using recognition confidence and script
-                # consistency. Raw character count strongly favored garbled OCR.
+                # Select OCR script using confidence and script consistency, not
+                # character count (which rewarded garbled OCR in the old version).
                 candidates = []
-                rgb = np.array(image)
                 for candidate_language in ("en", "japan"):
                     candidate_result = get_ocr(candidate_language).ocr(rgb, cls=True)
                     candidate_lines = candidate_result[0] if candidate_result and candidate_result[0] else []
@@ -251,40 +251,72 @@ def process_job(job):
                             confidence = float(item[1][1])
                         except (IndexError, TypeError, ValueError):
                             continue
-                        if not candidate_text:
-                            continue
-                        scored.append((candidate_text, max(0.0, min(1.0, confidence))))
+                        if candidate_text:
+                            scored.append((candidate_text, max(0.0, min(1.0, confidence))))
                     if not scored:
-                        candidates.append((-1.0, candidate_result, candidate_language))
+                        candidates.append((-1.0, candidate_language))
                         continue
                     text_all = " ".join(item[0] for item in scored)
                     avg_conf = sum(item[1] for item in scored) / len(scored)
                     useful = sum(1 for text, conf in scored if len(text) > 1 and conf >= 0.45) / len(scored)
                     if candidate_language == "japan":
-                        script_chars = sum(1 for ch in text_all if "\u3040" <= ch <= "\u30ff" or "\u4e00" <= ch <= "\u9fff")
+                        script_chars = sum(1 for ch in text_all if "\\u3040" <= ch <= "\\u30ff" or "\\u4e00" <= ch <= "\\u9fff")
                     else:
                         script_chars = sum(1 for ch in text_all if ch.isascii() and ch.isalpha())
                     letters = sum(1 for ch in text_all if ch.isalpha())
                     script_ratio = script_chars / max(1, letters)
-                    # Script ratio is a weak signal only: manga pages can mix
-                    # English dialogue with Japanese sound effects.
-                    quality = 0.65 * avg_conf + 0.25 * useful + 0.10 * script_ratio
-                    candidates.append((quality, candidate_result, candidate_language))
-                quality, ocr_result, chosen_ocr_language = max(candidates, key=lambda item: item[0])
-                log.info("Auto OCR selected %s model (score=%.3f)", chosen_ocr_language, quality)
+                    candidates.append((0.65 * avg_conf + 0.25 * useful + 0.10 * script_ratio, candidate_language))
+                _, chosen_ocr_language = max(candidates, key=lambda item: item[0])
             else:
                 chosen_ocr_language = source
-                ocr_result = get_ocr(source).ocr(np.array(image), cls=True)
+            ocr = get_ocr(chosen_ocr_language)
+
+            # Run recognition on both the source image and an enlarged, contrast-
+            # enhanced grayscale pass. Small lettering in manga bubbles is often
+            # missed on the default-sized pass. Coordinates from the enlarged pass
+            # are mapped back to the original image before merging detections.
+            import cv2
+            gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(gray)
+            enhanced_rgb = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2RGB)
+            scale = 1.5
+            enlarged = cv2.resize(enhanced_rgb, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
             detections = []
-            if ocr_result and ocr_result[0]:
-                for line_index, line in enumerate(ocr_result[0], start=1):
+            pass_specs = [(rgb, 1.0), (enlarged, scale)]
+            for pass_index, (pass_image, coord_scale) in enumerate(pass_specs):
+                pass_result = ocr.ocr(pass_image, cls=True)
+                pass_lines = pass_result[0] if pass_result and pass_result[0] else []
+                for line_index, item in enumerate(pass_lines, start=1):
                     try:
-                        text, score = str(line[1][0]).strip(), float(line[1][1])
-                        polygon = [[round(float(v), 2) for v in point] for point in line[0]]
+                        text, score = str(item[1][0]).strip(), float(item[1][1])
+                        polygon = [[round(float(v) / coord_scale, 2) for v in point] for point in item[0]]
                     except (IndexError, TypeError, ValueError):
                         continue
                     if text and len(polygon) >= 4:
-                        detections.append({"text": text, "confidence": score, "box": polygon, "line": line_index})
+                        detections.append({"text": text, "confidence": score, "box": polygon,
+                                           "line": line_index, "pass": pass_index})
+
+            # Merge duplicate detections from the two passes by bounding-box IoU;
+            # keep the higher-confidence reading instead of concatenating duplicates.
+            def box_iou(a, b):
+                ax0, ay0, ax1, ay1 = _box_metrics(a)
+                bx0, by0, bx1, by1 = _box_metrics(b)
+                inter = max(0.0, min(ax1, bx1) - max(ax0, bx0)) * max(0.0, min(ay1, by1) - max(ay0, by0))
+                union = max(1.0, (ax1-ax0)*(ay1-ay0) + (bx1-bx0)*(by1-by0) - inter)
+                return inter / union
+            merged = []
+            for detection in sorted(detections, key=lambda d: d["confidence"], reverse=True):
+                duplicate_index = next((i for i, existing in enumerate(merged)
+                                        if box_iou(detection["box"], existing["box"]) >= 0.55), None)
+                if duplicate_index is None:
+                    merged.append(detection)
+                elif len(detection["text"]) > len(merged[duplicate_index]["text"]) and detection["confidence"] > merged[duplicate_index]["confidence"] - 0.08:
+                    merged[duplicate_index] = detection
+            detections = sorted(merged, key=lambda d: (_box_metrics(d["box"])[1], _box_metrics(d["box"])[0]))
+            log.info("Auto OCR selected %s model; multi-pass detections=%s merged=%s",
+                     chosen_ocr_language, len(pass_specs) and sum(1 for _ in detections), len(detections))
             lines = group_ocr_detections(detections)
             log.info("OCR page %s: %s raw detections grouped into %s text blocks", page_index, len(detections), len(lines))
             for block_index, block in enumerate(lines, start=1):
