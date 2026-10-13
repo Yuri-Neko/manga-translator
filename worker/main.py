@@ -110,6 +110,12 @@ def process_job(job):
                         translated, translation_error = "", str(error)[:240]
                     lines.append({"line": line_index, "text": text, "translation": translated, "confidence": round(score, 4),
                                   "box": [[round(float(v), 2) for v in point] for point in line[0]], "translationError": translation_error})
+            with Image.open(page["path"]) as original_image:
+                original_width, original_height = original_image.size
+            scale_x, scale_y = original_width / image.width, original_height / image.height
+            for detected_line in lines:
+                detected_line["box"] = [[round(point[0] * scale_x, 2), round(point[1] * scale_y, 2)]
+                                        for point in detected_line.get("box", [])]
             safe_stem = Path(page["name"]).stem.replace("/", "_").replace("\\", "_") or f"page-{page_index}"
             rendered_path = image_out_dir / f"{page_index:04d}-{safe_stem}.png"
             try:
