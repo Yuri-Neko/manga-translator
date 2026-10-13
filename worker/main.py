@@ -422,11 +422,30 @@ def process_job(job):
             detections = sorted(merged, key=lambda d: (_box_metrics(d["box"])[1], _box_metrics(d["box"])[0]))
             log.info("Auto OCR selected %s model; multi-pass detections=%s merged=%s",
                      chosen_ocr_language, len(pass_specs) and sum(1 for _ in detections), len(detections))
+            if os.getenv("OCR_PROVIDER", "paddle").lower() == "gemini-vision":
+                try:
+                    vision_detections = gemini_vision_ocr(image)
+                    if vision_detections:
+                        detections = vision_detections
+                        log.info("Gemini Vision OCR returned %s blocks", len(detections))
+                    else:
+                        log.warning("Gemini Vision OCR returned no text; using PaddleOCR results")
+                except Exception as vision_error:
+                    log.warning("Gemini Vision OCR failed; falling back to PaddleOCR: %s", vision_error)
             lines = group_ocr_detections(detections)
-            log.info("OCR page %s: %s raw detections grouped into %s text blocks", page_index, len(detections), len(lines))
+            log.info("OCR page %s: %s detections grouped into %s text blocks", page_index, len(detections), len(lines))
             for block_index, block in enumerate(lines, start=1):
                 try:
-                    translated = translate_text(block["text"], source, target)
+                    # Supply neighboring dialogue as context but request translation
+                    # only for the current block to preserve one balloon per result.
+                    context_blocks = []
+                    for neighbor_index in (block_index - 2, block_index):
+                        if 0 <= neighbor_index < len(lines):
+                            neighbor_text = str(lines[neighbor_index].get("text", "")).strip()
+                            if neighbor_text:
+                                context_blocks.append(neighbor_text)
+                    context = " | ".join(context_blocks)
+                    translated = translate_text(block["text"], source, target, context=context)
                     if not translated:
                         raise RuntimeError("Penerjemah mengembalikan teks kosong")
                     block["translation"] = translated
