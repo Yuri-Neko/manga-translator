@@ -5,3 +5,9 @@ dist/
 !.env.example
 .vercel/
 .DS_Store
+
+# Cloudflare Tunnel credentials and generated configuration
+.cloudflare/*.json
+.cloudflare/cert.pem
+.cloudflare/*.pem
+.cloudflare/.env
