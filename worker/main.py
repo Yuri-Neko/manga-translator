@@ -232,16 +232,43 @@ def process_job(job):
             image = Image.open(io.BytesIO(normalized)).convert("RGB")
             import numpy as np
             if source in ("auto", ""):
-                # Auto mode compares English/Latin and Japanese OCR candidates.
+                # Compare both OCR models using recognition confidence and script
+                # consistency. Raw character count strongly favored garbled OCR.
                 candidates = []
+                rgb = np.array(image)
                 for candidate_language in ("en", "japan"):
-                    candidate_result = get_ocr(candidate_language).ocr(np.array(image), cls=True)
+                    candidate_result = get_ocr(candidate_language).ocr(rgb, cls=True)
                     candidate_lines = candidate_result[0] if candidate_result and candidate_result[0] else []
-                    candidate_text = [str(item[1][0]).strip() for item in candidate_lines if item and len(item) > 1]
-                    quality = sum(len(text) for text in candidate_text) + 3 * len(candidate_text)
-                    candidates.append((quality, candidate_result))
-                ocr_result = max(candidates, key=lambda item: item[0])[1]
+                    scored = []
+                    for item in candidate_lines:
+                        try:
+                            candidate_text = str(item[1][0]).strip()
+                            confidence = float(item[1][1])
+                        except (IndexError, TypeError, ValueError):
+                            continue
+                        if not candidate_text:
+                            continue
+                        scored.append((candidate_text, max(0.0, min(1.0, confidence))))
+                    if not scored:
+                        candidates.append((-1.0, candidate_result, candidate_language))
+                        continue
+                    text_all = " ".join(item[0] for item in scored)
+                    avg_conf = sum(item[1] for item in scored) / len(scored)
+                    useful = sum(1 for text, conf in scored if len(text) > 1 and conf >= 0.45) / len(scored)
+                    if candidate_language == "japan":
+                        script_chars = sum(1 for ch in text_all if "\u3040" <= ch <= "\u30ff" or "\u4e00" <= ch <= "\u9fff")
+                    else:
+                        script_chars = sum(1 for ch in text_all if ch.isascii() and ch.isalpha())
+                    letters = sum(1 for ch in text_all if ch.isalpha())
+                    script_ratio = script_chars / max(1, letters)
+                    # Script ratio is a weak signal only: manga pages can mix
+                    # English dialogue with Japanese sound effects.
+                    quality = 0.65 * avg_conf + 0.25 * useful + 0.10 * script_ratio
+                    candidates.append((quality, candidate_result, candidate_language))
+                quality, ocr_result, chosen_ocr_language = max(candidates, key=lambda item: item[0])
+                log.info("Auto OCR selected %s model (score=%.3f)", chosen_ocr_language, quality)
             else:
+                chosen_ocr_language = source
                 ocr_result = get_ocr(source).ocr(np.array(image), cls=True)
             detections = []
             if ocr_result and ocr_result[0]:
