@@ -1,3 +1,4 @@
+import requests
 import os
 import re
 import logging
@@ -109,9 +110,56 @@ def render_translated_page(source_path, lines, output_path):
         except (TypeError, ValueError, IndexError):
             log.warning("Skipping invalid OCR box during render")
     if np.any(mask):
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         mask = cv2.dilate(mask, kernel, iterations=1)
-        cleaned = cv2.inpaint(original, mask, 3, cv2.INPAINT_TELEA)
+        cleaned = None
+        diffusion_url = os.getenv("DIFFUSION_INPAINT_URL", "").strip().rstrip("/")
+        if diffusion_url:
+            # Optional AUTOMATIC1111/Forge img2img inpainting API. Keep this opt-in:
+            # full-page diffusion can be slow and may alter manga artwork.
+            try:
+                import base64
+                def png_b64(array):
+                    ok, encoded = cv2.imencode(".png", array)
+                    if not ok:
+                        raise RuntimeError("Gagal encode image untuk diffusion")
+                    return base64.b64encode(encoded.tobytes()).decode("ascii")
+                response = requests.post(
+                    diffusion_url + "/sdapi/v1/img2img",
+                    json={
+                        "init_images": [png_b64(original)],
+                        "mask": png_b64(mask),
+                        "prompt": os.getenv("DIFFUSION_INPAINT_PROMPT", "clean manga background, preserve original black and white manga line art, no text, no letters"),
+                        "negative_prompt": "text, letters, words, watermark, colorization, changed character, changed line art",
+                        "denoising_strength": float(os.getenv("DIFFUSION_DENOISING_STRENGTH", "0.35")),
+                        "inpainting_fill": 1,
+                        "inpaint_full_res": True,
+                        "inpaint_full_res_padding": 16,
+                        "inpainting_mask_invert": 0,
+                        "steps": int(os.getenv("DIFFUSION_STEPS", "12")),
+                        "cfg_scale": 4.0,
+                        "width": min(1024, max(512, (width // 8) * 8)),
+                        "height": min(1024, max(512, (height // 8) * 8)),
+                    },
+                    timeout=int(os.getenv("DIFFUSION_TIMEOUT", "240")),
+                )
+                response.raise_for_status()
+                payload = response.json()
+                generated = payload.get("images", [])
+                if generated:
+                    raw = base64.b64decode(generated[0].split(",", 1)[-1])
+                    decoded = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    if decoded is not None:
+                        if decoded.shape[:2] != original.shape[:2]:
+                            decoded = cv2.resize(decoded, (width, height), interpolation=cv2.INTER_CUBIC)
+                        # Diffusion may redraw outside the mask; composite only masked pixels.
+                        alpha = (mask.astype(np.float32) / 255.0)[:, :, None]
+                        cleaned = (decoded.astype(np.float32) * alpha + original.astype(np.float32) * (1.0-alpha)).astype(np.uint8)
+                        log.info("Background cleanup used diffusion endpoint %s", diffusion_url)
+            except Exception as error:
+                log.warning("Diffusion inpainting failed; using OpenCV fallback: %s", error)
+        if cleaned is None:
+            cleaned = cv2.inpaint(original, mask, 3, cv2.INPAINT_TELEA)
     else:
         cleaned = original.copy()
     canvas = Image.fromarray(cv2.cvtColor(cleaned, cv2.COLOR_BGR2RGB))
