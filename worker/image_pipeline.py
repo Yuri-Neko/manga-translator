@@ -98,7 +98,7 @@ def render_translated_page(source_path, lines, output_path):
     canvas = Image.fromarray(rgb)
     draw = ImageDraw.Draw(canvas)
     for line, points in valid:
-        translation = re.sub(r"\\s+", " ", str(line.get("translation") or "")).strip()
+        translation = re.sub(r"\s+", " ", str(line.get("translation") or "")).strip()
         x0, y0, x1, y1 = _bounds(points, width, height, pad=2)
         box_width, box_height = max(8, x1 - x0), max(8, y1 - y0)
         font, wrapped, line_height = _fit_text(draw, translation, box_width, box_height)
