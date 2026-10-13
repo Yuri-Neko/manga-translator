@@ -91,7 +91,12 @@ def translate_text(text, source, target):
             if choices:
                 best = max(choices, key=lambda item: float(item.get("confidence", 0)))
                 candidate = str(best.get("language", "")).strip()
-                if candidate and candidate != target_code and float(best.get("confidence", 0)) >= 0.35:
+                confidence = float(best.get("confidence", 0))
+                if candidate and confidence >= 0.55:
+                    # If OCR already reads confidently as the requested language,
+                    # don't force it through English and corrupt an already-localized page.
+                    if candidate == target_code:
+                        return cleaned
                     source_code = candidate
                 else:
                     source_code = "en"
