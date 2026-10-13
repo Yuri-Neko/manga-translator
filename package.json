@@ -1,0 +1,23 @@
+{
+  "name": "manga-translator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --config apps/web/vite.config.ts",
+    "build:web": "vite build --config apps/web/vite.config.ts",
+    "preview": "vite preview --config apps/web/vite.config.ts"
+  },
+  "dependencies": {
+    "@vercel/blob": "^1.1.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.7",
+    "@vitejs/plugin-react": "^4.7.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}
