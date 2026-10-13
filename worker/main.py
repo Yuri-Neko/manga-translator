@@ -72,53 +72,158 @@ def normalize_image(image_path):
     image.save(buffer, format="JPEG", quality=95)
     return buffer.getvalue()
 
-def translate_text(text, source, target):
+def _gemini_generate(parts, model=None):
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY belum diatur")
+    model = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    response = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        params={"key": api_key},
+        json={"contents": [{"role": "user", "parts": parts}],
+              "generationConfig": {"temperature": 0.1, "responseMimeType": "text/plain"}},
+        timeout=180,
+    )
+    response.raise_for_status()
+    data = response.json()
+    try:
+        return "".join(part.get("text", "") for part in data["candidates"][0]["content"]["parts"]).strip()
+    except (KeyError, IndexError, TypeError):
+        raise RuntimeError("Gemini tidak mengembalikan teks yang dapat dibaca")
+
+def _openai_compatible_chat(base_url, api_key, model, messages, timeout=180):
+    if not base_url or not api_key or not model:
+        raise RuntimeError("URL endpoint, API key, dan nama model harus diisi")
+    response = requests.post(
+        base_url.rstrip("/") + "/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={"model": model, "messages": messages, "temperature": 0.15},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    data = response.json()
+    try:
+        return data["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError, TypeError, AttributeError):
+        raise RuntimeError("Endpoint model tidak mengembalikan teks yang dapat dibaca")
+
+def translate_text(text, source, target, context=""):
     cleaned = " ".join(str(text).split())
     if not cleaned:
         return ""
     source_code = "zh" if source == "zh-TW" else source
     target_code = "zh" if target == "zh-TW" else target
-    # Detect language per grouped text block instead of asking the translator to
-    # guess across a whole page. This matters when English bubbles coexist with
-    # Japanese sound effects on the same page.
-    if source_code in ("auto", ""):
-        try:
-            detected = requests.post(
-                f"{TRANSLATE_URL}/detect", json={"q": cleaned}, timeout=30
-            )
-            detected.raise_for_status()
-            choices = detected.json()
-            if choices:
-                best = max(choices, key=lambda item: float(item.get("confidence", 0)))
-                candidate = str(best.get("language", "")).strip()
-                confidence = float(best.get("confidence", 0))
-                if candidate and confidence >= 0.55:
-                    # If OCR already reads confidently as the requested language,
-                    # don't force it through English and corrupt an already-localized page.
-                    if candidate == target_code:
-                        return cleaned
-                    source_code = candidate
+    provider = os.getenv("TRANSLATION_PROVIDER", "deepseek" if os.getenv("DEEPSEEK_API_KEY") else "libretranslate").lower()
+    language_names = {"id":"Indonesian", "en":"English", "ja":"Japanese", "ko":"Korean", "zh":"Chinese", "zh-TW":"Traditional Chinese", "es":"Spanish", "fr":"French", "de":"German", "pt":"Portuguese", "ru":"Russian"}
+    source_name = language_names.get(source_code, source_code or "auto-detected source language")
+    target_name = language_names.get(target, language_names.get(target_code, target_code))
+    prompt = (
+        "You are a professional manga/localization translator. Translate the dialogue into "
+        + target_name + ". Source language: " + source_name + ".\n"
+        "Use the surrounding context to infer pronouns, speaker intent, idioms, jokes, and natural dialogue. "
+        "Preserve meaning and tone; use concise, natural Indonesian when target is Indonesian. "
+        "Do not translate names unless they have an established localized form. "
+        "Return only the translated dialogue, without explanations, quotes, labels, or notes. "
+        "Do not invent information. If OCR text is clearly garbled, make the smallest plausible correction.\n"
+        + ("Nearby dialogue for context (do not translate this context): " + context + "\n" if context else "")
+        + "Dialogue: " + cleaned
+    )
+    if provider == "gemini":
+        translated = _gemini_generate([{"text": prompt}])
+    elif provider == "deepseek":
+        translated = _openai_compatible_chat(
+            os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+            os.getenv("DEEPSEEK_API_KEY", ""),
+            os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+            [{"role":"system","content":"You translate manga dialogue accurately and naturally. Output only the translation."},
+             {"role":"user","content":prompt}],
+        )
+    elif provider in ("openai-compatible", "local"):
+        translated = _openai_compatible_chat(
+            os.getenv("OPENAI_COMPATIBLE_BASE_URL", "http://host.docker.internal:1234/v1"),
+            os.getenv("OPENAI_COMPATIBLE_API_KEY", "local"),
+            os.getenv("OPENAI_COMPATIBLE_MODEL", "local-model"),
+            [{"role":"system","content":"You are an accurate manga dialogue translator. Output only the translation."},
+             {"role":"user","content":prompt}],
+        )
+    else:
+        # Free/local fallback. LibreTranslate is sentence-based and does not provide
+        # the same contextual localization quality as an LLM.
+        if source_code in ("auto", ""):
+            try:
+                detected = requests.post(f"{TRANSLATE_URL}/detect", json={"q": cleaned}, timeout=30)
+                detected.raise_for_status()
+                choices = detected.json()
+                if choices:
+                    best = max(choices, key=lambda item: float(item.get("confidence", 0)))
+                    candidate = str(best.get("language", "")).strip()
+                    confidence = float(best.get("confidence", 0))
+                    if candidate and confidence >= 0.55:
+                        if candidate == target_code:
+                            return cleaned
+                        source_code = candidate
+                    else:
+                        source_code = "en"
                 else:
                     source_code = "en"
-            else:
+            except (requests.RequestException, ValueError, TypeError):
                 source_code = "en"
-        except (requests.RequestException, ValueError, TypeError):
-            # Manga pages often contain English scanlation text; English is a
-            # safer fallback than the old generic auto mode for Latin OCR.
-            source_code = "en"
-    response = requests.post(
-        f"{TRANSLATE_URL}/translate",
-        json={"q": cleaned, "source": source_code, "target": target_code, "format": "text"},
-        timeout=120,
-    )
-    response.raise_for_status()
-    translated = " ".join(str(response.json().get("translatedText", "")).split())
+        response = requests.post(
+            f"{TRANSLATE_URL}/translate",
+            json={"q": cleaned, "source": source_code, "target": target_code, "format": "text"},
+            timeout=120,
+        )
+        response.raise_for_status()
+        translated = str(response.json().get("translatedText", "")).strip()
+    translated = " ".join(str(translated).split()).strip('"“”')
     if not translated:
-        raise RuntimeError("LibreTranslate mengembalikan hasil kosong")
-    # Avoid silently treating a failed/empty translation as success.
+        raise RuntimeError(f"{provider} mengembalikan hasil kosong")
     if translated.casefold() == cleaned.casefold() and source_code != target_code:
-        log.warning("Translation unchanged for detected source=%s: %r", source_code, cleaned[:100])
+        log.warning("Translation unchanged provider=%s source=%s: %r", provider, source_code, cleaned[:100])
     return translated
+
+def gemini_vision_ocr(image):
+    """Return OCR text and bounding boxes from Gemini vision; coordinates are normalized 0..1000."""
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY belum diatur")
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=92)
+    import base64
+    prompt = (
+        "Read all visible text in this manga page. Return ONLY valid JSON array. "
+        "Each item must have keys text, box, confidence. box is four [x,y] points in clockwise order, "
+        "coordinates normalized to 0..1000 relative to the full image. Read each speech balloon separately; "
+        "never combine different balloons or panels. Preserve reading order as best as possible. "
+        "Include dialogue and meaningful sound effects; ignore tiny decorative marks. "
+        "Do not translate, paraphrase, repair or invent text. Use exact original text. "
+        "confidence is a number from 0 to 1. Output [] if no readable text."
+    )
+    model = os.getenv("GEMINI_VISION_MODEL", os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
+    parts = [{"text": prompt}, {"inlineData": {"mimeType":"image/jpeg", "data":base64.b64encode(buffer.getvalue()).decode("ascii")}}]
+    raw = _gemini_generate(parts, model=model)
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[-1]
+        if raw.endswith("```"):
+            raw = raw[:-3]
+    data = json.loads(raw)
+    if not isinstance(data, list):
+        raise RuntimeError("Gemini Vision OCR harus mengembalikan array JSON")
+    width, height = image.size
+    output = []
+    for item in data:
+        try:
+            text = str(item["text"]).strip()
+            box = item["box"]
+            if not text or len(box) < 4:
+                continue
+            polygon = [[max(0, min(width-1, float(point[0]) * width / 1000)),
+                        max(0, min(height-1, float(point[1]) * height / 1000))] for point in box[:4]]
+            output.append({"text":text, "box":polygon, "confidence":float(item.get("confidence",0.7))})
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+    return output
 
 def _box_metrics(polygon):
     xs = [float(point[0]) for point in polygon]
