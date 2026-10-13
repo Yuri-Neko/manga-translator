@@ -86,7 +86,7 @@ def render_translated_page(source_path, lines, output_path):
                 if len(erase_polygon) < 3:
                     continue
                 erase_points = np.asarray(
-                    [[int(round(float(p[0])), int(round(float(p[1]))))] for p in erase_polygon],
+                    [[int(round(float(p[0]))), int(round(float(p[1])))] for p in erase_polygon],
                     dtype=np.int32
                 ).reshape(-1, 2)
                 erase_points[:, 0] = np.clip(erase_points[:, 0], 0, width - 1)
