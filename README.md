@@ -45,11 +45,51 @@ npm run dev
 The frontend expects the Docker API to be available through the Nginx proxy for job submission and status.
 
 
-## Translated manga image output
+## Context-aware AI translation, vision OCR, and inpainting
 
-The Docker worker now also attempts to generate a translated PNG for each page. It uses PaddleOCR polygons, OpenCV Telea inpainting to remove detected lettering, LibreTranslate for the selected target language, and Pillow to typeset the translated text. Downloaded `results.zip` includes `translated_images/*.png` alongside the JSON/TXT translation data.
+Configure providers in the private `.env` file, then rebuild the worker. Never commit API keys.
 
-This is automatic image cleanup, not generative reconstruction: complex artwork behind lettering can leave visible artifacts, and long or vertical text may need manual review. Use a TTF font with the desired scripts and configure `MANGA_FONT_PATH` when the default font lacks glyph coverage. Rebuild the Docker worker after updates with `docker compose up -d --build worker`.
+### DeepSeek translation (recommended for contextual dialogue)
+```dotenv
+TRANSLATION_PROVIDER=deepseek
+DEEPSEEK_API_KEY=your_deepseek_api_key
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+DEEPSEEK_MODEL=deepseek-chat
+```
+The translator passes nearby dialogue as context but asks the model to return only the current balloon's translation. This helps idioms and tone, but it cannot guarantee perfect OCR or translation.
+
+### Gemini translation and vision OCR
+```dotenv
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=gemini-2.5-flash
+GEMINI_VISION_MODEL=gemini-2.5-flash
+TRANSLATION_PROVIDER=gemini
+OCR_PROVIDER=gemini-vision
+```
+Gemini Vision receives the page image and returns text with normalized dialogue-region coordinates. This sends manga page images to Google's API and may incur usage charges. If Vision fails or returns no blocks, the worker falls back to PaddleOCR. For local OCR, set `OCR_PROVIDER=paddle`.
+
+### Local OpenAI-compatible model
+```dotenv
+TRANSLATION_PROVIDER=openai-compatible
+OPENAI_COMPATIBLE_BASE_URL=http://host.docker.internal:1234/v1
+OPENAI_COMPATIBLE_API_KEY=local
+OPENAI_COMPATIBLE_MODEL=your-loaded-model-id
+```
+This is intended for a local server such as LM Studio. The model must already be loaded and reachable from the Docker host. Local inference quality and speed depend on your model and hardware.
+
+### Diffusion inpainting (optional)
+Set `DIFFUSION_INPAINT_URL` to an AUTOMATIC1111/Forge API base URL, for example `http://host.docker.internal:7860`, with its API enabled. The worker sends the original page and text mask to `/sdapi/v1/img2img`. Keep this blank to use OpenCV inpainting. Diffusion can reconstruct textured backgrounds better in some cases but may alter original line art and needs substantial GPU memory/time; inspect outputs carefully.
+
+Example deployment:
+```bash
+cd /root/manga-translator
+# Edit .env, select providers and add API keys
+docker compose config --quiet
+docker compose up -d --build worker
+docker compose logs --tail=100 worker
+``
+
+The worker emits translated PNG pages plus `translation.json` and `translation.txt`. Use a font with the required scripts via `MANGA_FONT_PATH` if necessary. API keys stay in `.env`; do not paste them into chat or commit them.
 
 
 ## VPS deployment with Cloudflare Tunnel
