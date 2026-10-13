@@ -98,6 +98,30 @@ app.get('/api/jobs/:id', async (req, res, next) => {
     res.json({ job: rows[0] });
   } catch (error) { next(error); }
 });
+app.get('/api/jobs/:id/images', async (req, res, next) => {
+  try {
+    const { rows } = await pool.query('SELECT status,result_path FROM jobs WHERE id=$1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Job tidak ditemukan.' });
+    if (rows[0].status !== 'completed' || !rows[0].result_path) return res.status(409).json({ error: 'Hasil belum tersedia.' });
+    const manifestPath = path.join(path.dirname(rows[0].result_path), 'translation.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    const pages = (manifest.pages || []).filter((page) => page.translatedImage && !page.imageError)
+      .map((page) => ({ page: page.page, file: page.file, url: `/api/jobs/${req.params.id}/images/${encodeURIComponent(path.basename(page.translatedImage))}` }));
+    res.json({ pages });
+  } catch (error) { next(error); }
+});
+app.get('/api/jobs/:id/images/:filename', async (req, res, next) => {
+  try {
+    const { rows } = await pool.query('SELECT status,result_path FROM jobs WHERE id=$1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Job tidak ditemukan.' });
+    if (rows[0].status !== 'completed' || !rows[0].result_path) return res.status(409).json({ error: 'Hasil belum tersedia.' });
+    const filename = path.basename(decodeURIComponent(req.params.filename));
+    if (!/^\\d{4}-[\\p{L}\\p{N}._ -]+\\.png$/u.test(filename)) return res.status(400).json({ error: 'Nama gambar tidak valid.' });
+    const imagePath = path.join(path.dirname(rows[0].result_path), 'translated_images', filename);
+    await fs.access(imagePath);
+    res.type('png').sendFile(imagePath);
+  } catch (error) { next(error); }
+});
 app.get('/api/jobs/:id/download', async (req, res, next) => {
   try {
     const { rows } = await pool.query('SELECT status,result_path FROM jobs WHERE id=$1', [req.params.id]);
