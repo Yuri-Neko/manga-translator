@@ -81,6 +81,104 @@ def translate_text(text, source, target):
     response.raise_for_status()
     return str(response.json().get("translatedText", "")).strip()
 
+def _box_metrics(polygon):
+    xs = [float(point[0]) for point in polygon]
+    ys = [float(point[1]) for point in polygon]
+    return min(xs), min(ys), max(xs), max(ys)
+
+def group_ocr_detections(detections):
+    """Merge nearby OCR word boxes into visual lines, then nearby lines into text blocks."""
+    items = []
+    for detection in detections:
+        text = str(detection.get("text", "")).strip()
+        polygon = detection.get("box") or []
+        if not text or len(polygon) < 4:
+            continue
+        x0, y0, x1, y1 = _box_metrics(polygon)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        items.append({"text": text, "box": polygon, "confidence": detection.get("confidence", 0.0),
+                      "x0": x0, "y0": y0, "x1": x1, "y1": y1})
+    if not items:
+        return []
+    # First combine boxes that sit on the same visual row.
+    items.sort(key=lambda item: ((item["y0"] + item["y1"]) / 2, item["x0"]))
+    rows = []
+    for item in items:
+        cy = (item["y0"] + item["y1"]) / 2
+        h = max(1.0, item["y1"] - item["y0"])
+        best = None
+        best_distance = float("inf")
+        for row in rows[-8:]:
+            row_y0 = min(part["y0"] for part in row)
+            row_y1 = max(part["y1"] for part in row)
+            row_cy = (row_y0 + row_y1) / 2
+            row_h = max(1.0, row_y1 - row_y0)
+            overlap = max(0.0, min(item["y1"], row_y1) - max(item["y0"], row_y0))
+            if overlap / max(1.0, min(h, row_h)) >= 0.35 or abs(cy - row_cy) <= 0.35 * max(h, row_h):
+                distance = abs(cy - row_cy)
+                if distance < best_distance:
+                    best, best_distance = row, distance
+        if best is None:
+            rows.append([item])
+        else:
+            best.append(item)
+    line_blocks = []
+    for row in rows:
+        row.sort(key=lambda item: item["x0"])
+        current = []
+        for item in row:
+            if current:
+                prev = current[-1]
+                h = max(1.0, min(prev["y1"] - prev["y0"], item["y1"] - item["y0"]))
+                gap = item["x0"] - prev["x1"]
+                # Do not bridge wide gaps; those often separate columns or speech balloons.
+                if gap > max(22.0, 2.2 * h):
+                    line_blocks.append(current)
+                    current = []
+            current.append(item)
+        if current:
+            line_blocks.append(current)
+    lines = []
+    for block in line_blocks:
+        block.sort(key=lambda item: item["x0"])
+        lines.append({"parts": block, "text": " ".join(part["text"] for part in block),
+                      "x0": min(part["x0"] for part in block), "y0": min(part["y0"] for part in block),
+                      "x1": max(part["x1"] for part in block), "y1": max(part["y1"] for part in block)})
+    # Combine adjacent rows only when their horizontal extents align and vertical gap is small.
+    lines.sort(key=lambda item: (item["y0"], item["x0"]))
+    groups = []
+    for line in lines:
+        candidate = None
+        for group in reversed(groups[-5:]):
+            gap = line["y0"] - group["y1"]
+            line_h = max(1.0, line["y1"] - line["y0"])
+            group_h = max(1.0, group["y1"] - group["y0"])
+            overlap = max(0.0, min(line["x1"], group["x1"]) - max(line["x0"], group["x0"]))
+            overlap_ratio = overlap / max(1.0, min(line["x1"] - line["x0"], group["x1"] - group["x0"]))
+            left_aligned = abs(line["x0"] - group["x0"]) <= max(24.0, 0.35 * max(line_h, group_h))
+            if -0.25 * line_h <= gap <= 1.25 * max(line_h, group_h) and (overlap_ratio >= 0.45 or left_aligned):
+                candidate = group
+                break
+        if candidate is None:
+            groups.append({"lines": [line], "x0": line["x0"], "y0": line["y0"], "x1": line["x1"], "y1": line["y1"]})
+        else:
+            candidate["lines"].append(line)
+            candidate["x0"] = min(candidate["x0"], line["x0"])
+            candidate["y0"] = min(candidate["y0"], line["y0"])
+            candidate["x1"] = max(candidate["x1"], line["x1"])
+            candidate["y1"] = max(candidate["y1"], line["y1"])
+    output = []
+    for group in groups:
+        group_lines = sorted(group["lines"], key=lambda line: (line["y0"], line["x0"]))
+        text = " ".join(line["text"] for line in group_lines)
+        parts = [part for line in group_lines for part in line["parts"]]
+        polygon = [[group["x0"], group["y0"]], [group["x1"], group["y0"]],
+                   [group["x1"], group["y1"]], [group["x0"], group["y1"]]]
+        output.append({"text": text, "box": polygon, "eraseBoxes": [part["box"] for part in parts],
+                       "confidence": round(sum(float(part["confidence"]) for part in parts) / len(parts), 4)})
+    return output
+
 def process_job(job):
     job_id, source, target = job["id"], job.get("sourceLanguage", "auto"), job.get("targetLanguage", "id")
     db_update(job_id, "processing", error=None)
@@ -97,25 +195,39 @@ def process_job(job):
             image = Image.open(io.BytesIO(normalized)).convert("RGB")
             import numpy as np
             ocr_result = get_ocr(source).ocr(np.array(image), cls=True)
-            lines = []
+            detections = []
             if ocr_result and ocr_result[0]:
                 for line_index, line in enumerate(ocr_result[0], start=1):
-                    try: text, score = str(line[1][0]).strip(), float(line[1][1])
-                    except (IndexError, TypeError, ValueError): continue
-                    if not text: continue
                     try:
-                        translated, translation_error = translate_text(text, source, target), None
-                    except Exception as error:
-                        log.warning("Translation failed on page %s line %s: %s", page_index, line_index, error)
-                        translated, translation_error = "", str(error)[:240]
-                    lines.append({"line": line_index, "text": text, "translation": translated, "confidence": round(score, 4),
-                                  "box": [[round(float(v), 2) for v in point] for point in line[0]], "translationError": translation_error})
+                        text, score = str(line[1][0]).strip(), float(line[1][1])
+                        polygon = [[round(float(v), 2) for v in point] for point in line[0]]
+                    except (IndexError, TypeError, ValueError):
+                        continue
+                    if text and len(polygon) >= 4:
+                        detections.append({"text": text, "confidence": score, "box": polygon, "line": line_index})
+            lines = group_ocr_detections(detections)
+            log.info("OCR page %s: %s raw detections grouped into %s text blocks", page_index, len(detections), len(lines))
+            for block_index, block in enumerate(lines, start=1):
+                try:
+                    translated = translate_text(block["text"], source, target)
+                    if not translated:
+                        raise RuntimeError("Penerjemah mengembalikan teks kosong")
+                    block["translation"] = translated
+                    block["translationError"] = None
+                except Exception as error:
+                    log.warning("Translation failed on page %s block %s: %s", page_index, block_index, error)
+                    block["translation"] = ""
+                    block["translationError"] = str(error)[:240]
             with Image.open(page["path"]) as original_image:
                 original_width, original_height = original_image.size
             scale_x, scale_y = original_width / image.width, original_height / image.height
             for detected_line in lines:
                 detected_line["box"] = [[round(point[0] * scale_x, 2), round(point[1] * scale_y, 2)]
                                         for point in detected_line.get("box", [])]
+                detected_line["eraseBoxes"] = [
+                    [[round(point[0] * scale_x, 2), round(point[1] * scale_y, 2)] for point in polygon]
+                    for polygon in detected_line.get("eraseBoxes", [])
+                ]
             safe_stem = Path(page["name"]).stem.replace("/", "_").replace("\\", "_") or f"page-{page_index}"
             rendered_path = image_out_dir / f"{page_index:04d}-{safe_stem}.png"
             try:
