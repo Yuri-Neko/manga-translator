@@ -191,7 +191,10 @@ def group_ocr_detections(detections):
             overlap = max(0.0, min(line["x1"], group["x1"]) - max(line["x0"], group["x0"]))
             overlap_ratio = overlap / max(1.0, min(line["x1"] - line["x0"], group["x1"] - group["x0"]))
             left_aligned = abs(line["x0"] - group["x0"]) <= max(24.0, 0.35 * max(line_h, group_h))
-            if -0.25 * line_h <= gap <= 1.25 * max(line_h, group_h) and (overlap_ratio >= 0.45 or left_aligned):
+            # Be conservative: nearby speech balloons often have similar left
+            # edges. Merge lines only when their horizontal spans strongly overlap
+            # and the vertical gap is small; false merges corrupt translation context.
+            if -0.15 * line_h <= gap <= 0.70 * max(line_h, group_h) and overlap_ratio >= 0.60:
                 candidate = group
                 break
         if candidate is None:
