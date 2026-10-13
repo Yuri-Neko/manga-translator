@@ -22,7 +22,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 DATABASE_URL = os.environ["DATABASE_URL"]
 TRANSLATE_URL = os.getenv("LIBRETRANSLATE_URL", "http://translate:5000").rstrip("/")
 MAX_SIDE = int(os.getenv("OCR_MAX_IMAGE_SIDE", "2200"))
-OCR_LANG = {"auto": "japan", "ja": "japan", "ko": "korean", "zh": "ch", "zh-TW": "ch", "th": "th", "vi": "vi", "ar": "arabic", "ru": "cyrillic", "hi": "devanagari", "ta": "ta", "te": "te"}
+OCR_LANG = {"auto": "en", "ja": "japan", "ko": "korean", "zh": "ch", "zh-TW": "ch", "th": "th", "vi": "vi", "ar": "arabic", "ru": "cyrillic", "hi": "devanagari", "ta": "ta", "te": "te"}
 ocr_instances = {}
 
 def db_update(job_id, status, **fields):
@@ -194,7 +194,18 @@ def process_job(job):
             normalized = normalize_image(page["path"])
             image = Image.open(io.BytesIO(normalized)).convert("RGB")
             import numpy as np
-            ocr_result = get_ocr(source).ocr(np.array(image), cls=True)
+            if source in ("auto", ""):
+                # Auto mode compares English/Latin and Japanese OCR candidates.
+                candidates = []
+                for candidate_language in ("en", "japan"):
+                    candidate_result = get_ocr(candidate_language).ocr(np.array(image), cls=True)
+                    candidate_lines = candidate_result[0] if candidate_result and candidate_result[0] else []
+                    candidate_text = [str(item[1][0]).strip() for item in candidate_lines if item and len(item) > 1]
+                    quality = sum(len(text) for text in candidate_text) + 3 * len(candidate_text)
+                    candidates.append((quality, candidate_result))
+                ocr_result = max(candidates, key=lambda item: item[0])[1]
+            else:
+                ocr_result = get_ocr(source).ocr(np.array(image), cls=True)
             detections = []
             if ocr_result and ocr_result[0]:
                 for line_index, line in enumerate(ocr_result[0], start=1):
