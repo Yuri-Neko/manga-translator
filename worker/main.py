@@ -73,13 +73,47 @@ def normalize_image(image_path):
     return buffer.getvalue()
 
 def translate_text(text, source, target):
-    cleaned = text.strip()
-    if not cleaned: return ""
-    source_code = "zh" if source == "zh-TW" else (source if source not in ("auto", "") else "auto")
+    cleaned = " ".join(str(text).split())
+    if not cleaned:
+        return ""
+    source_code = "zh" if source == "zh-TW" else source
     target_code = "zh" if target == "zh-TW" else target
-    response = requests.post(f"{TRANSLATE_URL}/translate", json={"q": cleaned, "source": source_code, "target": target_code, "format": "text"}, timeout=120)
+    # Detect language per grouped text block instead of asking the translator to
+    # guess across a whole page. This matters when English bubbles coexist with
+    # Japanese sound effects on the same page.
+    if source_code in ("auto", ""):
+        try:
+            detected = requests.post(
+                f"{TRANSLATE_URL}/detect", json={"q": cleaned}, timeout=30
+            )
+            detected.raise_for_status()
+            choices = detected.json()
+            if choices:
+                best = max(choices, key=lambda item: float(item.get("confidence", 0)))
+                candidate = str(best.get("language", "")).strip()
+                if candidate and candidate != target_code and float(best.get("confidence", 0)) >= 0.35:
+                    source_code = candidate
+                else:
+                    source_code = "en"
+            else:
+                source_code = "en"
+        except (requests.RequestException, ValueError, TypeError):
+            # Manga pages often contain English scanlation text; English is a
+            # safer fallback than the old generic auto mode for Latin OCR.
+            source_code = "en"
+    response = requests.post(
+        f"{TRANSLATE_URL}/translate",
+        json={"q": cleaned, "source": source_code, "target": target_code, "format": "text"},
+        timeout=120,
+    )
     response.raise_for_status()
-    return str(response.json().get("translatedText", "")).strip()
+    translated = " ".join(str(response.json().get("translatedText", "")).split())
+    if not translated:
+        raise RuntimeError("LibreTranslate mengembalikan hasil kosong")
+    # Avoid silently treating a failed/empty translation as success.
+    if translated.casefold() == cleaned.casefold() and source_code != target_code:
+        log.warning("Translation unchanged for detected source=%s: %r", source_code, cleaned[:100])
+    return translated
 
 def _box_metrics(polygon):
     xs = [float(point[0]) for point in polygon]
