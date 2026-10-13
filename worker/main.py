@@ -422,17 +422,31 @@ def process_job(job):
             detections = sorted(merged, key=lambda d: (_box_metrics(d["box"])[1], _box_metrics(d["box"])[0]))
             log.info("Auto OCR selected %s model; multi-pass detections=%s merged=%s",
                      chosen_ocr_language, len(pass_specs) and sum(1 for _ in detections), len(detections))
-            if os.getenv("OCR_PROVIDER", "paddle").lower() == "gemini-vision":
+            use_gemini_vision = os.getenv("OCR_PROVIDER", "paddle").lower() == "gemini-vision"
+            if use_gemini_vision:
                 try:
                     vision_detections = gemini_vision_ocr(image)
                     if vision_detections:
                         detections = vision_detections
-                        log.info("Gemini Vision OCR returned %s blocks", len(detections))
+                        log.info("Gemini Vision OCR returned %s dialogue blocks", len(detections))
                     else:
+                        use_gemini_vision = False
                         log.warning("Gemini Vision OCR returned no text; using PaddleOCR results")
                 except Exception as vision_error:
+                    use_gemini_vision = False
                     log.warning("Gemini Vision OCR failed; falling back to PaddleOCR: %s", vision_error)
-            lines = group_ocr_detections(detections)
+            if use_gemini_vision:
+                # Gemini has already segmented dialogue regions. Do not regroup them
+                # with geometry heuristics, which could merge neighboring balloons.
+                lines = []
+                for detection in detections:
+                    polygon = detection.get("box") or []
+                    if len(polygon) >= 4 and str(detection.get("text", "")).strip():
+                        lines.append({"text": detection["text"], "box": polygon,
+                                      "eraseBoxes": [polygon],
+                                      "confidence": float(detection.get("confidence", 0.7))})
+            else:
+                lines = group_ocr_detections(detections)
             log.info("OCR page %s: %s detections grouped into %s text blocks", page_index, len(detections), len(lines))
             for block_index, block in enumerate(lines, start=1):
                 try:
