@@ -76,7 +76,7 @@ def render_translated_page(source_path, lines, output_path):
         if not translation or len(polygon) < 3:
             continue
         try:
-            points = np.asarray([[int(round(float(p[0])), int(round(float(p[1]))))] for p in polygon], dtype=np.int32).reshape(-1, 2)
+            points = np.asarray([[int(round(float(p[0]))), int(round(float(p[1])))] for p in polygon], dtype=np.int32).reshape(-1, 2)
             points[:, 0] = np.clip(points[:, 0], 0, width - 1)
             points[:, 1] = np.clip(points[:, 1], 0, height - 1)
             if len(points) < 3:
