@@ -94,16 +94,21 @@ def _gemini_generate(parts, model=None, response_mime_type="text/plain"):
 def _openai_compatible_chat(base_url, api_key, model, messages, timeout=180):
     if not base_url or not api_key or not model:
         raise RuntimeError("URL endpoint, API key, dan nama model harus diisi")
+    log.info("AI translation request: endpoint=%s model=%s", base_url.rstrip("/"), model)
     response = requests.post(
         base_url.rstrip("/") + "/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json={"model": model, "messages": messages, "temperature": 0.15},
         timeout=timeout,
     )
+    if not response.ok:
+        log.error("AI translation HTTP %s from %s: %s", response.status_code, base_url.rstrip("/"), response.text[:800])
     response.raise_for_status()
     data = response.json()
     try:
-        return data["choices"][0]["message"]["content"].strip()
+        result = data["choices"][0]["message"]["content"].strip()
+        log.info("AI translation response received: model=%s chars=%s", model, len(result))
+        return result
     except (KeyError, IndexError, TypeError, AttributeError):
         raise RuntimeError("Endpoint model tidak mengembalikan teks yang dapat dibaca")
 
@@ -113,7 +118,8 @@ def translate_text(text, source, target, context=""):
         return ""
     source_code = "zh" if source == "zh-TW" else source
     target_code = "zh" if target == "zh-TW" else target
-    provider = os.getenv("TRANSLATION_PROVIDER", "deepseek" if os.getenv("DEEPSEEK_API_KEY") else "libretranslate").lower()
+    provider = os.getenv("TRANSLATION_PROVIDER", "deepseek" if os.getenv("DEEPSEEK_API_KEY") else "libretranslate").strip().lower()
+    log.info("Translation provider selected: %s", provider)
     language_names = {"id":"Indonesian", "en":"English", "ja":"Japanese", "ko":"Korean", "zh":"Chinese", "zh-TW":"Traditional Chinese", "es":"Spanish", "fr":"French", "de":"German", "pt":"Portuguese", "ru":"Russian"}
     source_name = language_names.get(source_code, source_code or "auto-detected source language")
     target_name = language_names.get(target, language_names.get(target_code, target_code))
