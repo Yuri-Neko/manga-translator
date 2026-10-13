@@ -48,12 +48,22 @@ export default function App() {
   const [tab, setTab] = useState<'translator' | 'queue' | 'glossary'>('translator');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
-  const [jobs, setJobs] = useState<Job[]>([]);\n  const [previewJob, setPreviewJob] = useState<string | null>(null);\n  const [previewPages, setPreviewPages] = useState<Record<string, PreviewPage[]>>({});\n  const [previewError, setPreviewError] = useState('');
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [previewJob, setPreviewJob] = useState<string | null>(null);
+  const [previewPages, setPreviewPages] = useState<Record<string, PreviewPage[]>>({});
+  const [previewError, setPreviewError] = useState('');
   const [apiOnline, setApiOnline] = useState(false);
   const pickerRef = useRef<HTMLInputElement>(null);
   const totalSize = useMemo(() => files.reduce((sum, item) => sum + item.file.size, 0), [files]);
   const formatSize = (size: number) => size >= 1024 ** 3 ? `${(size / 1024 ** 3).toFixed(2)} GB` : `${(size / 1024 ** 2).toFixed(1)} MB`;
-  const refreshJobs = async () => { try { const response = await fetch('/api/jobs'); if (!response.ok) throw new Error('API offline'); const data = await response.json(); setJobs(data.jobs || []); setApiOnline(true); } catch { setApiOnline(false); } };\n  const togglePreview = async (jobId: string) => {\n    if (previewJob === jobId) { setPreviewJob(null); return; }\n    setPreviewJob(jobId); setPreviewError('');\n    if (previewPages[jobId]) return;\n    try { const response = await fetch(`/api/jobs/${jobId}/images`); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Gagal memuat preview gambar.'); setPreviewPages((old) => ({ ...old, [jobId]: data.pages || [] })); }\n    catch (error) { setPreviewError(error instanceof Error ? error.message : 'Gagal memuat preview gambar.'); }\n  };
+  const refreshJobs = async () => { try { const response = await fetch('/api/jobs'); if (!response.ok) throw new Error('API offline'); const data = await response.json(); setJobs(data.jobs || []); setApiOnline(true); } catch { setApiOnline(false); } };
+  const togglePreview = async (jobId: string) => {
+    if (previewJob === jobId) { setPreviewJob(null); return; }
+    setPreviewJob(jobId); setPreviewError('');
+    if (previewPages[jobId]) return;
+    try { const response = await fetch(`/api/jobs/${jobId}/images`); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Gagal memuat preview gambar.'); setPreviewPages((old) => ({ ...old, [jobId]: data.pages || [] })); }
+    catch (error) { setPreviewError(error instanceof Error ? error.message : 'Gagal memuat preview gambar.'); }
+  };
   useEffect(() => { void refreshJobs(); const timer = window.setInterval(() => void refreshJobs(), 5000); return () => window.clearInterval(timer); }, []);
 
   const addFiles = (list: FileList | File[]) => {
