@@ -22,7 +22,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 DATABASE_URL = os.environ["DATABASE_URL"]
 TRANSLATE_URL = os.getenv("LIBRETRANSLATE_URL", "http://translate:5000").rstrip("/")
 MAX_SIDE = int(os.getenv("OCR_MAX_IMAGE_SIDE", "2200"))
-OCR_LANG = {"auto": "en", "ja": "japan", "ko": "korean", "zh": "ch", "zh-TW": "ch", "th": "th", "vi": "vi", "ar": "arabic", "ru": "cyrillic", "hi": "devanagari", "ta": "ta", "te": "te"}
+OCR_LANG = {"auto": "en", "en": "en", "ja": "japan", "ko": "korean", "zh": "ch", "zh-TW": "ch", "th": "th", "vi": "vi", "ar": "arabic", "ru": "cyrillic", "hi": "devanagari", "ta": "ta", "te": "te"}
 ocr_instances = {}
 
 def db_update(job_id, status, **fields):
@@ -38,7 +38,7 @@ def db_update(job_id, status, **fields):
         conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = %s", values)
 
 def get_ocr(language):
-    model_language = OCR_LANG.get(language, "latin")
+    model_language = OCR_LANG.get(language, "en")
     if model_language not in ocr_instances:
         log.info("Loading PaddleOCR model: %s", model_language)
         ocr_instances[model_language] = PaddleOCR(use_angle_cls=True, lang=model_language, show_log=False)
