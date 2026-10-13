@@ -6,9 +6,19 @@ services:
       dockerfile: Dockerfile.web
     restart: unless-stopped
     ports:
-      - "${WEB_PORT:-8080}:80"
+      - "127.0.0.1:${WEB_PORT:-8080}:80"
     depends_on:
-      api:
+      cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: ["tunnel", "--config", "/etc/cloudflared/config.yml", "run"]
+    volumes:
+      - ./.cloudflare:/etc/cloudflared:ro
+    depends_on:
+      web:
+        condition: service_started
+    networks: [frontend]
+  api:
         condition: service_healthy
     networks: [frontend, backend]
   api:
