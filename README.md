@@ -1,64 +1,45 @@
-# Manga Translate Studio
+# Manga Translate Studio — Docker/VPS Edition
 
-A lightweight, responsive manga-localization workspace built with React, TypeScript, and Vite. The interface adapts to Android phones, iPhone/iPad, tablets, laptops, and desktop screens.
+A responsive manga OCR and text-translation workspace designed to run on a self-hosted VPS with Docker Compose.
 
-## Current features
+## Features
 
-- Responsive dark UI with desktop navigation and a compact mobile bottom bar.
-- Select PNG, JPG/JPEG, WebP images or ZIP chapter archives.
-- Choose automatic source detection or a source language, then select a target language.
-- Language choices include Indonesian, English, Japanese, Korean, Simplified/Traditional Chinese, Thai, Vietnamese, Malay, Filipino, Spanish, French, German, Portuguese, Italian, Russian, Arabic, Hindi, Bengali, Turkish, Polish, Dutch, Swedish, Ukrainian, Persian, Hebrew, Tamil, Urdu, and Burmese.
-- Session-only local file queue and file-size summary.
-- Optional upload to Vercel Blob through a lightweight API endpoint.
-- No external font download or heavy UI component library.
+- Responsive layout for Android, iOS, tablets, laptops, and desktops.
+- Upload PNG, JPG/JPEG, WebP, BMP, TIFF, or ZIP chapters (up to 100 files per job; per-file size configurable).
+- Many source/target language choices; target defaults to Indonesian.
+- Persistent job queue and status page.
+- OCR and translation run in Docker worker containers, not in the browser.
+- Download a ZIP containing `translation.json` and `translation.txt`.
 
-## Important: translation status
-
-The multilingual language selector is ready, but **automatic manga translation is not implemented yet**. The current UI can prepare a workflow and upload files when Blob is configured; it does not yet perform OCR, translate dialogue, clean original lettering, typeset translated text, or export a finished chapter. Selecting a language does not mean that translation engine is connected.
-
-To deliver real end-to-end manga translation, integrate:
-1. OCR/text-region detection that supports the manga's source scripts.
-2. A translation provider/model that supports the selected source and target languages.
-3. Image cleaning/inpainting and typesetting.
-4. A persistent job queue and ZIP/image export.
-
-The OCR and image-processing worker should run separately from Vercel's lightweight frontend/API functions (for example, in a container or VPS). Keep API credentials on the server, never in browser code.
+**Current limitation:** this is the first OCR + text-translation pipeline, not yet full manga image localization. It does not erase original lettering or typeset translated dialogue back into images. OCR model availability and translation language pairs depend on models available in PaddleOCR and LibreTranslate. Auto source currently uses a Japanese OCR model as a manga-oriented default; choose Japanese, Korean, or Chinese manually for script-specific OCR.
 
 ## Stack
 
-- React + TypeScript + Vite
-- Vercel Functions for lightweight API routes
-- Vercel Blob for file storage
-- No translation/OCR provider configured by default
+- React + TypeScript + Vite + Nginx
+- Node.js + Express API
+- PostgreSQL + Redis queue
+- Python + PaddleOCR worker
+- LibreTranslate self-hosted translation service
 
-## Run locally
+## Deploy with Docker
+
+See [DEPLOY-DOCKER.md](DEPLOY-DOCKER.md).
+
+```bash
+git clone https://github.com/Yuri-Neko/manga-translator.git
+cd manga-translator
+cp .env.example .env
+# Edit .env and set a strong POSTGRES_PASSWORD
+docker compose up -d --build
+```
+
+Open `http://YOUR_VPS_IP:8080` by default. The first build and model download can be large and take time. PostgreSQL, Redis, and translation service ports are not exposed publicly.
+
+## Local UI development
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open the local URL printed by Vite (normally `http://localhost:5173`).
-
-## Deploy on Vercel
-
-1. Import `Yuri-Neko/manga-translator` from GitHub at https://vercel.com/new.
-2. Use the repository root as the Root Directory.
-3. Build command: `npm run build:web`.
-4. Output directory: `apps/web/dist`.
-5. Create a Vercel Blob store and add `BLOB_READ_WRITE_TOKEN` to the project's Environment Variables, then redeploy if you want uploads.
-
-The current upload endpoint sends file data through a Vercel Function, so keep uploads small. For large chapters, use direct browser-to-Blob uploads and a separate worker. Vercel is a good fit for the UI and lightweight API routes, not a long-running OCR/image-processing worker.
-
-## Performance notes
-
-- The frontend uses React and a small custom CSS design rather than a large UI framework.
-- Fonts use the device/system font stack, avoiding an extra Google Fonts request.
-- The UI does not process OCR or image translation in the browser yet. Actual translation performance will depend on the OCR/translation service and worker added later.
-
-## Current limitations
-
-- OCR and automatic translation are not active yet.
-- OpenCV/image cleaning and typesetting are not active yet.
-- The queue is currently a browser-session UI, not a persistent background queue.
-- Uploading requires a configured Blob store.
+The frontend expects the Docker API to be available through the Nginx proxy for job submission and status.

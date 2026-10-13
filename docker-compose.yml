@@ -1,0 +1,106 @@
+name: manga-translator
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [frontend, backend]
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgres://${POSTGRES_USER:-manga}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-manga}
+      REDIS_URL: redis://redis:6379
+      DATA_DIR: /data
+      LIBRETRANSLATE_URL: http://translate:5000
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-40}
+    volumes: [manga_data:/data]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [backend]
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-manga}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-manga}
+      REDIS_URL: redis://redis:6379
+      LIBRETRANSLATE_URL: http://translate:5000
+      DATA_DIR: /data
+      OCR_MAX_IMAGE_SIDE: ${OCR_MAX_IMAGE_SIDE:-2200}
+    volumes:
+      - manga_data:/data
+      - paddle_models:/root/.paddleocr
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      translate:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_MEMORY_LIMIT:-6G}
+    networks: [backend]
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-manga}
+      POSTGRES_USER: ${POSTGRES_USER:-manga}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-manga} -d ${POSTGRES_DB:-manga}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [backend]
+  translate:
+    image: libretranslate/libretranslate:latest
+    restart: unless-stopped
+    environment:
+      LT_DISABLE_WEB_UI: "true"
+    volumes: [translate_models:/home/libretranslate/.local]
+    networks: [backend]
+volumes:
+  manga_data:
+  postgres_data:
+  redis_data:
+  paddle_models:
+  translate_models:
+networks:
+  frontend: {}
+  backend: {}
