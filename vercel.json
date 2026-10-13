@@ -1,15 +1,5 @@
 {
   "buildCommand": "npm run build:web",
   "outputDirectory": "apps/web/dist",
-  "framework": "vite",
-  "rewrites": [
-    {
-      "source": "/api/health",
-      "destination": "/api/health.ts"
-    },
-    {
-      "source": "/api/uploads",
-      "destination": "/api/uploads.ts"
-    }
-  ]
+  "framework": "vite"
 }
